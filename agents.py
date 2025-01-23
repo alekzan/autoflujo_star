@@ -351,8 +351,8 @@ def recordar_informacion_importante(
 
 
 tools = [
-    general_retriever_tool,
-    menu_retriever_tool,
+    # general_retriever_tool,
+    # menu_retriever_tool,
     add_user_to_restaurant_db,
     update_reservation_in_restaurant_db,
     cancel_reservation_in_restaurant_db,
