@@ -1,6 +1,7 @@
 import streamlit as st
-import sqlite3
 import os
+import gspread
+from google.oauth2.service_account import Credentials
 
 # SendGrid imports
 from sendgrid import SendGridAPIClient
@@ -18,40 +19,110 @@ from restaurant_graph import call_model
 # Import your email templates
 from emails_templates import asunto_1, mensaje_1_html, mensaje_1_plain
 
-DB_NAME = "data/restaurante_data.db"
+# Google Sheet ID (extracted from your provided URL)
+SHEET_ID = "1KkUROgG1enUbg4KYEJhgmZ8sT7nGCCaN3p8w-mRfxmE"
 
 
-# --------------------
-# Ensure the table exists with 'has_completed_form' column
-# --------------------
-def create_table():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute(
-        """
-        CREATE TABLE IF NOT EXISTS restaurante_info(
-            email TEXT PRIMARY KEY,
-            informacion_general TEXT,
-            politicas_metodos_pago TEXT,
-            menu_restricciones TEXT,
-            promociones_eventos TEXT,
-            has_completed_form BOOLEAN DEFAULT 0
-        )
-        """
+# ----------------------------------------------------------
+# Google Sheets Functions
+# ----------------------------------------------------------
+def get_gspread_client():
+    # Check if a local JSON file is specified via environment variable
+    json_path = os.getenv(
+        "GOOGLE_CREDENTIALS_JSON", "data/spreadsheet-demo-for-hr-9cf643c81c21.json"
     )
-    conn.commit()
-    conn.close()
+    if os.path.exists(json_path):
+        # Local testing: load credentials from the JSON file
+        client = gspread.service_account(filename=json_path)
+        return client
+    else:
+        # Use credentials from st.secrets (for Streamlit Cloud deployment)
+        creds_dict = st.secrets["GOOGLE_SERVICE_ACCOUNT"]
+        creds = Credentials.from_service_account_info(
+            creds_dict, scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
+        client = gspread.authorize(creds)
+        return client
 
 
-create_table()
+def get_sheet():
+    client = get_gspread_client()
+    # Assumes you are using the first worksheet in the spreadsheet
+    sheet = client.open_by_key(SHEET_ID).sheet1
+    return sheet
 
 
-# --------------------
-# Función para ENVIAR correo con SendGrid
-# --------------------
+def get_restaurant_data(email):
+    """
+    Returns the row as a list if found, else None.
+    Expected row format:
+    [email, informacion_general, politicas_metodos_pago, menu_restricciones, promociones_eventos, has_completed_form]
+    """
+    sheet = get_sheet()
+    cell = sheet.find(email)
+    if cell is None:
+        return None
+    row_values = sheet.row_values(cell.row)
+    # Ensure the row has exactly 6 columns (pad with empty strings if necessary)
+    while len(row_values) < 6:
+        row_values.append("")
+    # Convert has_completed_form to integer (if possible)
+    try:
+        row_values[5] = int(row_values[5])
+    except ValueError:
+        row_values[5] = 0
+    return row_values
+
+
+def insert_placeholder_email(email):
+    """
+    If the email is not already in the sheet, append a new row with empty data.
+    """
+    if get_restaurant_data(email) is None:
+        sheet = get_sheet()
+        new_row = [email, "", "", "", "", "0"]
+        sheet.append_row(new_row)
+
+
+def mark_form_completed(
+    email, info_general, politicas_pago, menu_restricciones, promociones_eventos
+):
+    """
+    Updates the row for the given email with full data and sets has_completed_form to 1.
+    If the email isn't found, it appends a new row.
+    """
+    sheet = get_sheet()
+    try:
+        cell = sheet.find(email)
+        row_number = cell.row
+        updated_row = [
+            email,
+            info_general,
+            politicas_pago,
+            menu_restricciones,
+            promociones_eventos,
+            "1",
+        ]
+        cell_range = f"A{row_number}:F{row_number}"
+        sheet.update(cell_range, [updated_row])
+    except gspread.exceptions.CellNotFound:
+        new_row = [
+            email,
+            info_general,
+            politicas_pago,
+            menu_restricciones,
+            promociones_eventos,
+            "1",
+        ]
+        sheet.append_row(new_row)
+
+
+# ----------------------------------------------------------
+# Existing Email Sending & Navigation Functions
+# ----------------------------------------------------------
 def enviar_correo(recipient, subject, html_content, plain_text=None):
     """
-    Sends an email using SendGrid API with optional Plain Text and HTML.
+    Sends an email using SendGrid API with optional plain text and HTML content.
     """
     message = Mail(
         from_email="Alex de AutoFlujo Star <alex@autoflujo.com>",
@@ -72,91 +143,14 @@ def enviar_correo(recipient, subject, html_content, plain_text=None):
         return None
 
 
-# --------------------
-# Obtener fila completa
-# --------------------
-def get_restaurant_data(email):
-    """
-    Returns the row if exists, else None.
-    Row structure:
-      (email, info_general, politicas_pago, menu_restricciones, promos, has_completed_form)
-    """
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute(
-        """
-        SELECT email, informacion_general, politicas_metodos_pago, 
-               menu_restricciones, promociones_eventos, has_completed_form
-          FROM restaurante_info
-         WHERE email=?
-        """,
-        (email,),
-    )
-    data = c.fetchone()
-    conn.close()
-    return data
-
-
-# --------------------
-# Insert or update minimal row for new email (if not exists)
-# without the form data. has_completed_form=0
-# --------------------
-def insert_placeholder_email(email):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    # Only insert if it doesn't exist
-    c.execute(
-        """
-        INSERT OR IGNORE INTO restaurante_info(
-            email, informacion_general, politicas_metodos_pago,
-            menu_restricciones, promociones_eventos, has_completed_form
-        )
-        VALUES (?, '', '', '', '', 0)
-        """,
-        (email,),
-    )
-    conn.commit()
-    conn.close()
-
-
-# --------------------
-# Function to mark form as completed (has_completed_form=1)
-# --------------------
-def mark_form_completed(
-    email, info_general, politicas_pago, menu_restricciones, promociones_eventos
-):
-    """
-    Updates the row to store the full data and set has_completed_form=1
-    """
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute(
-        """
-        UPDATE restaurante_info
-           SET informacion_general=?,
-               politicas_metodos_pago=?,
-               menu_restricciones=?,
-               promociones_eventos=?,
-               has_completed_form=1
-         WHERE email=?
-        """,
-        (info_general, politicas_pago, menu_restricciones, promociones_eventos, email),
-    )
-    conn.commit()
-    conn.close()
-
-
-# --------------------
-# Cambiar de página
-# --------------------
 def go_to(page_name):
     st.session_state["page"] = page_name
     st.rerun()
 
 
-# --------------------
-# HOME
-# --------------------
+# ----------------------------------------------------------
+# Page Functions
+# ----------------------------------------------------------
 def pagina_home():
     st.title("Bienvenido a la Configuración de tu Agente IA")
     st.write("Por favor, ingresa tu correo electrónico para continuar.")
@@ -168,18 +162,14 @@ def pagina_home():
             data = get_restaurant_data(email_input.strip())
             st.session_state["email"] = email_input.strip()
 
-            # If email is found in DB
+            # If email is found in the sheet
             if data:
-                # data[5] = has_completed_form (0/1)
                 has_completed_form = data[5]
                 if has_completed_form == 1:
-                    # Form was completed => go to chat
                     go_to("chat")
                 else:
-                    # Form incomplete => go to form
                     go_to("formulario")
             else:
-                # Email not in DB => Send email once
                 status = enviar_correo(
                     recipient=email_input.strip(),
                     subject=asunto_1,
@@ -191,21 +181,15 @@ def pagina_home():
                 else:
                     st.warning("No se pudo enviar el correo de bienvenida.")
 
-                # Insert placeholder row => has_completed_form=0
                 insert_placeholder_email(email_input.strip())
-
-                # Then go to form
                 go_to("formulario")
         else:
             st.warning("Por favor, ingresa un correo válido.")
 
 
-# --------------------
-# FORMULARIO
-# --------------------
 def pagina_formulario():
     if st.button("🔙 Regresar al Inicio"):
-        st.session_state["email"] = ""  # Clear stored email
+        st.session_state["email"] = ""
         go_to("home")
 
     st.title("Formulario de Configuración de tu Agente IA")
@@ -288,13 +272,11 @@ def pagina_formulario():
 
     if st.button("Enviar"):
         email_user = st.session_state.get("email", "")
-
         if not info_general_is_valid():
             st.warning("Todos los campos marcados con * son obligatorios.")
             return
 
         if email_user.strip():
-            # Update row => set has_completed_form=1
             mark_form_completed(
                 email_user.strip(),
                 info_general_str,
@@ -308,9 +290,6 @@ def pagina_formulario():
             st.warning("No se detectó un correo válido. Regresa al inicio.")
 
 
-# --------------------
-# CHAT
-# --------------------
 def pagina_chat():
     st.title("Chatea con tu Agente IA")
     st.write(
@@ -329,10 +308,9 @@ def pagina_chat():
 
     data = get_restaurant_data(email_user.strip())
     if not data:
-        st.warning("No hay datos en la BD. Regresa al Inicio.")
+        st.warning("No hay datos en la hoja. Regresa al Inicio.")
         return
 
-    # data = (email, info_general, politicas, menu_restricciones, promos, has_completed_form)
     restaurant_data = f"""--- RESTAURANT DATA ---
 Información General:
 {data[1]}
@@ -360,7 +338,6 @@ Promociones y Eventos:
     if user_input := st.chat_input("Escribe tu mensaje..."):
         user_message = {"role": "user", "content": user_input}
         st.session_state["messages"].append(user_message)
-
         with st.chat_message("user"):
             st.markdown(user_input)
 
@@ -370,20 +347,15 @@ Promociones y Eventos:
             restaurant_data=restaurant_data,
             config=config_dict,
         )
-
         assistant_message = {"role": "assistant", "content": response_text}
         st.session_state["messages"].append(assistant_message)
-
         with st.chat_message("assistant"):
             st.markdown(response_text)
 
-    # 🔹 Buttons side by side
-    col1, col2 = st.columns([1, 1])  # Two equal columns
-
+    col1, col2 = st.columns([1, 1])
     with col1:
         if st.button("Regresar al Inicio"):
             go_to("home")
-
     with col2:
         st.markdown(
             '<a href="https://airtable.com/appWZExxj1q0LD4n1/shr2YO6pa1FtGtqMH/tbll5UzqzJG0f2YMJ?date=undefined&mode=undefined" target="_blank">'
@@ -393,35 +365,19 @@ Promociones y Eventos:
         )
 
 
-# --------------------
-# Agregar logo y footer para todas las páginas
-# --------------------
 def add_logo_and_footer():
-    # Logo (top)
     st.image("images/autoflujo-logo.png", width=150)
-    # Footer (bottom)
-    st.markdown(
-        "<hr style='margin-top:3em'>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("<hr style='margin-top:3em'>", unsafe_allow_html=True)
 
 
-# --------------------
-# Control de Navegación
-# --------------------
 def main():
-    # 1. Show logo at top
-    add_logo_and_footer()  # This places the logo at the top and also the footer at the bottom
-
-    # Because Streamlit re-runs top to bottom, the footer code will be placed
-    # after all the page content. We'll re-inject it at the end too. We'll do a trick below.
+    add_logo_and_footer()
 
     if "page" not in st.session_state:
         st.session_state["page"] = "home"
 
     page = st.session_state["page"]
 
-    # 2. Show the chosen page
     if page == "home":
         pagina_home()
     elif page == "formulario":
