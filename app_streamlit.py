@@ -27,16 +27,13 @@ SHEET_ID = "1KkUROgG1enUbg4KYEJhgmZ8sT7nGCCaN3p8w-mRfxmE"
 # Google Sheets Functions
 # ----------------------------------------------------------
 def get_gspread_client():
-    # Check if a local JSON file is specified via environment variable
     json_path = os.getenv(
         "GOOGLE_CREDENTIALS_JSON", "data/spreadsheet-demo-for-hr-9cf643c81c21.json"
     )
     if os.path.exists(json_path):
-        # Local testing: load credentials from the JSON file
         client = gspread.service_account(filename=json_path)
         return client
     else:
-        # Use credentials from st.secrets (for Streamlit Cloud deployment)
         creds_dict = st.secrets["GOOGLE_SERVICE_ACCOUNT"]
         creds = Credentials.from_service_account_info(
             creds_dict, scopes=["https://www.googleapis.com/auth/spreadsheets"]
@@ -47,26 +44,18 @@ def get_gspread_client():
 
 def get_sheet():
     client = get_gspread_client()
-    # Assumes you are using the first worksheet in the spreadsheet
     sheet = client.open_by_key(SHEET_ID).sheet1
     return sheet
 
 
 def get_restaurant_data(email):
-    """
-    Returns the row as a list if found, else None.
-    Expected row format:
-    [email, informacion_general, politicas_metodos_pago, menu_restricciones, promociones_eventos, has_completed_form]
-    """
     sheet = get_sheet()
     cell = sheet.find(email)
     if cell is None:
         return None
     row_values = sheet.row_values(cell.row)
-    # Ensure the row has exactly 6 columns (pad with empty strings if necessary)
     while len(row_values) < 6:
         row_values.append("")
-    # Convert has_completed_form to integer (if possible)
     try:
         row_values[5] = int(row_values[5])
     except ValueError:
@@ -75,21 +64,20 @@ def get_restaurant_data(email):
 
 
 def insert_placeholder_email(email):
-    """
-    If the email is not already in the sheet, append a new row with empty data.
-    """
     if get_restaurant_data(email) is None:
         sheet = get_sheet()
         new_row = [email, "", "", "", "", "0"]
         sheet.append_row(new_row)
 
 
-def mark_form_completed(
-    email, info_general, politicas_pago, menu_restricciones, promociones_eventos
-):
+def mark_form_completed(email, info_general, preguntas_frecuentes, info_adicional):
     """
-    Updates the row for the given email with full data and sets has_completed_form to 1.
-    If the email isn't found, it appends a new row.
+    Updates the row for the given email with the full data and sets has_completed_form to 1.
+    Note: The sheet currently has 5 data columns. Here we map:
+      - Column2: información_general
+      - Column3: preguntas_frecuentes
+      - Column4: información_adicional
+      - Column5: se deja vacío (puedes modificarlo según lo requieras)
     """
     sheet = get_sheet()
     try:
@@ -98,9 +86,9 @@ def mark_form_completed(
         updated_row = [
             email,
             info_general,
-            politicas_pago,
-            menu_restricciones,
-            promociones_eventos,
+            preguntas_frecuentes,
+            info_adicional,
+            "",  # Puedes dejar este campo vacío o asignarle otro valor
             "1",
         ]
         cell_range = f"A{row_number}:F{row_number}"
@@ -109,21 +97,18 @@ def mark_form_completed(
         new_row = [
             email,
             info_general,
-            politicas_pago,
-            menu_restricciones,
-            promociones_eventos,
+            preguntas_frecuentes,
+            info_adicional,
+            "",
             "1",
         ]
         sheet.append_row(new_row)
 
 
 # ----------------------------------------------------------
-# Existing Email Sending & Navigation Functions
+# Email Sending & Navigation Functions
 # ----------------------------------------------------------
 def enviar_correo(recipient, subject, html_content, plain_text=None):
-    """
-    Sends an email using SendGrid API with optional plain text and HTML content.
-    """
     message = Mail(
         from_email="Alex de AutoFlujo Star <alex@autoflujo.com>",
         to_emails=recipient,
@@ -161,8 +146,6 @@ def pagina_home():
         if email_input.strip():
             data = get_restaurant_data(email_input.strip())
             st.session_state["email"] = email_input.strip()
-
-            # If email is found in the sheet
             if data:
                 has_completed_form = data[5]
                 if has_completed_form == 1:
@@ -177,10 +160,9 @@ def pagina_home():
                     plain_text=mensaje_1_plain,
                 )
                 if status == 202:
-                    st.success("¡Correo de bienvenida enviado con éxito!")
+                    st.success("¡Cargando tu información, espera un momento!")
                 else:
                     st.warning("No se pudo enviar el correo de bienvenida.")
-
                 insert_placeholder_email(email_input.strip())
                 go_to("formulario")
         else:
@@ -199,76 +181,68 @@ def pagina_formulario():
     )
     st.write("Campos con * son obligatorios.")
 
-    # 1. Información General
-    st.subheader("1. Información General del Restaurante")
+    # 1. Información básica del restaurante
+    st.subheader("1. Información básica del restaurante")
     info_nombre = st.text_input("Nombre del Restaurante *")
-    info_ubicacion = st.text_input("Ubicación (Dirección exacta) *")
-    info_google_maps = st.text_input("Link de Google Maps *")
-    info_menu_link = st.text_input("Enlace al Menú Digital (Opcional)")
-    info_tipo_cocina = st.text_input("Tipo de Cocina (Italiana, Mexicana, etc.) *")
-    info_contacto = st.text_input("Contacto para Clientes (Tel, WhatsApp, etc.) *")
+    info_tipo_cocina = st.text_input(
+        "Tipo de Cocina (Ej.: italiana, mexicana, sushi...) *"
+    )
+    info_google_maps = st.text_input("Dirección (link Google Maps recomendado) *")
     info_horarios = st.text_area(
-        "Horario de Apertura y Cierre (ej: Lunes-Viernes 12:00-22:00) *",
-        "Lunes-Viernes: \nSábados y Domingos: ",
+        "Horario de Servicio *",
+        "Lunes a Viernes: 11:00 am - 10:00 pm\nSábado: 11:00 am - 12:00 am\nDomingos: 11:00 am - 9:00 pm",
     )
-    info_dias_festivos = st.text_area(
-        "Días Festivos (¿abren en festivos? Horarios especiales?) *"
-    )
+    info_contacto = st.text_input("Teléfono o WhatsApp para Reservaciones *")
+    info_menu_link = st.text_input("Link al menú digital (Opcional)")
 
     def info_general_is_valid():
         return all(
             [
                 info_nombre.strip(),
-                info_ubicacion.strip(),
-                info_google_maps.strip(),
                 info_tipo_cocina.strip(),
-                info_contacto.strip(),
+                info_google_maps.strip(),
                 info_horarios.strip(),
-                info_dias_festivos.strip(),
+                info_contacto.strip(),
             ]
         )
 
     info_general_str = f"""
 **Nombre:** {info_nombre}
-**Ubicación:** {info_ubicacion}
-**Google Maps:** {info_google_maps}
-{"**Menú Online:** " + info_menu_link if info_menu_link.strip() else ""}
 **Tipo de Cocina:** {info_tipo_cocina}
+**Dirección:** {info_google_maps}
+{"**Menú Digital:** " + info_menu_link if info_menu_link.strip() else ""}
+**Horario:** {info_horarios}
 **Contacto:** {info_contacto}
-**Horarios:** {info_horarios}
-**Días Festivos:** {info_dias_festivos}
     """
 
-    # 2. Políticas y Métodos de Pago
-    st.subheader("2. Políticas y Métodos de Pago")
+    # 2. Preguntas frecuentes que responderá tu Agente IA
+    st.subheader("2. Preguntas frecuentes que responderá tu Agente IA")
+    servicio_entrega = st.text_area(
+        "¿Tienen servicio para llevar (Pick Up) o domicilio? *\n(Explica brevemente cómo funciona)"
+    )
     metodos_pago = st.text_area(
-        "Métodos de pago aceptados (Ej: Efectivo, Tarjeta)", "Efectivo, Tarjeta"
+        "Métodos de pago aceptados *\n(Ej.: Efectivo, tarjetas, transferencias, etc.)",
+        "Efectivo, Tarjeta",
     )
-    propinas_tarjeta = st.selectbox(
-        "¿Aceptan propinas con tarjeta?", ["Sí", "No"], index=0
+    promociones_eventos = st.text_area(
+        "¿Ofrecen promociones especiales o paquetes para eventos?\n(Menciona brevemente las más importantes o escribe 'no aplica')"
     )
-    bebidas_pasteles_externos = st.text_input(
-        "¿Se permite traer bebidas externas?", "No"
+    permite_mascotas = st.selectbox(
+        "¿Permiten ingreso con mascotas?", ["Sí", "No"], index=0
     )
 
-    politicas_pago_str = f"""
+    preguntas_frecuentes_str = f"""
+**Servicio para llevar o domicilio:** {servicio_entrega}
 **Métodos de Pago:** {metodos_pago}
-**Propinas con Tarjeta:** {propinas_tarjeta}
-**Bebidas/Pasteles Externos:** {bebidas_pasteles_externos}
+**Promociones/Paquetes:** {promociones_eventos}
+**Ingreso con Mascotas:** {permite_mascotas}
     """
 
-    # 3. Promociones y Eventos
-    st.subheader("3. Promociones y Eventos")
-    promos_diarias = st.text_area("¿Tienen promociones diarias?", "No actualmente")
-    paquetes_celebracion = st.text_area(
-        "¿Tienen paquetes para celebraciones?",
-        "Sí, paquete con pastel y te cantamos las mañanitas.",
+    # 3. Información adicional importante
+    st.subheader("3. Información adicional importante")
+    info_adicional = st.text_area(
+        "Si hay algún otro detalle importante que el Agente IA deba conocer, escríbelo aquí brevemente:\n(Ej.: estacionamiento, accesos especiales, días festivos especiales, etc.)"
     )
-
-    promociones_eventos_str = f"""
-**Promociones Diarias:** {promos_diarias}
-**Paquetes de Celebración:** {paquetes_celebracion}
-    """
 
     if st.button("Enviar"):
         email_user = st.session_state.get("email", "")
@@ -280,9 +254,12 @@ def pagina_formulario():
             mark_form_completed(
                 email_user.strip(),
                 info_general_str,
-                politicas_pago_str,
-                "Información de menú no incluida",
-                promociones_eventos_str,
+                preguntas_frecuentes_str,
+                (
+                    info_adicional
+                    if info_adicional.strip()
+                    else "No se agregó información adicional."
+                ),
             )
             st.success("¡Información guardada exitosamente!")
             go_to("chat")
@@ -300,6 +277,12 @@ def pagina_chat():
         'Para revisar la información de tus reservaciones <a href="https://airtable.com/appWZExxj1q0LD4n1/shr2YO6pa1FtGtqMH/tbll5UzqzJG0f2YMJ?date=undefined&mode=undefined" target="_blank">da click en esta tabla</a>.',
         unsafe_allow_html=True,
     )
+    st.markdown(
+        """Si quieres instalar este Agente IA en el WhatsApp de tu negocio, 
+    <a href="https://api.whatsapp.com/send/?phone=525559075128&text=Me+interesa+generar+rese%C3%B1as+positivas+en+mi+restaurante+con+AutoFlujo+Star.+%C2%BFMe+das+m%C3%A1s+informaci%C3%B3n%3F&type=phone_number&app_absent=0" 
+    target="_blank">da click aquí</a>.""",
+        unsafe_allow_html=True,
+    )
 
     email_user = st.session_state.get("email", "")
     if not email_user:
@@ -312,17 +295,14 @@ def pagina_chat():
         return
 
     restaurant_data = f"""--- RESTAURANT DATA ---
-Información General:
+Información Básica:
 {data[1]}
 
-Políticas y Métodos de Pago:
+Preguntas Frecuentes:
 {data[2]}
 
-Menú y Restricciones:
+Información Adicional:
 {data[3]}
-
-Promociones y Eventos:
-{data[4]}
 -------------------------
 """
 
