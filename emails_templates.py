@@ -14,7 +14,7 @@ Gracias por probar nuestro demo de AutoFlujo Star.
 
 Queremos ayudarte a ser el restaurante preferido de tu zona. ¿Listo para seguir?
 
-Haz clic aquí: https://calendly.com/autoflujo/30min para que terminemos de configurar tu tu Asistente IA.
+Haz clic aquí: https://bit.ly/4bza3FS para que terminemos de configurar tu tu Asistente IA.
 
 ¡Gracias!
 
@@ -39,7 +39,7 @@ mensaje_1_html = """
 
     <p>Queremos ayudarte a ser el restaurante preferido de tu zona. ¿Listo para seguir?</p>
 
-    <p><a href="https://calendly.com/autoflujo/30min" target="_blank"><strong>Haz clic aquí</strong></a> para que terminemos de configurar tu Asistente IA.</p>
+    <p><a href="https://bit.ly/4bza3FS" target="_blank"><strong>Haz clic aquí</strong></a> para que terminemos de configurar tu Asistente IA.</p>
 
     <p><strong>¡Gracias!</strong></p>
     <p><strong>Alex Capellán</strong><br>
